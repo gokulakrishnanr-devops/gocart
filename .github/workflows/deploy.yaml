@@ -108,185 +108,218 @@ jobs:
             --severity CRITICAL \
             --ignore-unfixed \
             gocart-backend:scan
-
-
-
-  # ==========================================
-  # STAGE 3: BUILD AND PUSH TO AMAZON ECR
-  # ==========================================
+ # ──────────────────────────────────────────────
+  # Stage 3: Build, Tag & Push Images + Helm Chart
+  # ──────────────────────────────────────────────
   build-and-push:
     name: Build, Tag & Push
     runs-on: ubuntu-latest
     needs: security-scan
-
-    permissions:
-      contents: read
-      id-token: write
-
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials using OIDC
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
-
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Create ECR repositories if missing
+      - name: Ensure ECR repositories exist
         run: |
           for repo in shopverse-frontend shopverse-backend shopverse-helmchart/shopverse; do
-            aws ecr describe-repositories \
-              --repository-names "$repo" \
-              --region "$AWS_REGION" >/dev/null 2>&1 || \
-            aws ecr create-repository \
-              --repository-name "$repo" \
-              --region "$AWS_REGION"
+            aws ecr describe-repositories --repository-names $repo --region ${{ env.AWS_REGION }} 2>/dev/null || \
+            aws ecr create-repository --repository-name $repo --region ${{ env.AWS_REGION }}
           done
 
-      - name: Build frontend Docker image
+      - name: Build and tag frontend image
         run: |
-          docker build \
-            -t "$ECR_REGISTRY/shopverse-frontend:$GITHUB_SHA" \
-            -t "$ECR_REGISTRY/shopverse-frontend:latest" \
-            ./frontend
+          docker build -t ${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
+                        -t ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest \
+                        ./frontend
 
-      - name: Build backend Docker image
+      - name: Build and tag backend image
         run: |
-          docker build \
-            -t "$ECR_REGISTRY/shopverse-backend:$GITHUB_SHA" \
-            -t "$ECR_REGISTRY/shopverse-backend:latest" \
-            ./backend
+          docker build -t ${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
+                        -t ${{ env.ECR_REGISTRY }}/shopverse-backend:latest \
+                        ./backend
 
       - name: Push frontend image
         run: |
-          docker push "$ECR_REGISTRY/shopverse-frontend:$GITHUB_SHA"
-          docker push "$ECR_REGISTRY/shopverse-frontend:latest"
+          docker push ${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest
 
       - name: Push backend image
         run: |
-          docker push "$ECR_REGISTRY/shopverse-backend:$GITHUB_SHA"
-          docker push "$ECR_REGISTRY/shopverse-backend:latest"
+          docker push ${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/shopverse-backend:latest
+
+      - name: Update Helm values.yaml with new image tags
+        run: |
+          FRONTEND_IMG="${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}"
+          BACKEND_IMG="${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}"
+          sed -i "s|image:.*# frontend-image|image: ${FRONTEND_IMG}  # frontend-image|" helm/shopverse/values.yaml
+          sed -i "s|image:.*# backend-image|image: ${BACKEND_IMG}  # backend-image|" helm/shopverse/values.yaml
+          echo "Updated values.yaml:"
+          cat helm/shopverse/values.yaml
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v3
 
-      - name: Login Helm to Amazon ECR
+      - name: Login Helm to ECR
         run: |
-          aws ecr get-login-password --region "$AWS_REGION" |
-            helm registry login \
-              --username AWS \
-              --password-stdin "$ECR_REGISTRY"
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+            helm registry login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
 
       - name: Package Helm chart
         run: |
           helm package ./helm/shopverse \
-            --version "1.0.0-$GITHUB_SHA" \
-            --app-version "$GITHUB_SHA"
+            --version 1.0.0-${{ github.sha }} \
+            --app-version ${{ github.sha }}
 
       - name: Push Helm chart to ECR
         run: |
-          helm push "shopverse-1.0.0-$GITHUB_SHA.tgz" \
-            "oci://$ECR_REGISTRY/shopverse-helmchart"
-
-  # ==========================================
-  # STAGE 4: DEPLOY TO AMAZON EKS
-  # ==========================================
+          helm push shopverse-1.0.0-${{ github.sha }}.tgz \
+            oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart
+  # ──────────────────────────────────────────────
+  # Stage 4: Provision Infra (if needed) + Deploy
+  # ──────────────────────────────────────────────
   deploy:
-    name: Deploy GoCart to EKS
+    name: Provision Infra & Deploy
     runs-on: ubuntu-latest
     needs: build-and-push
-
-    permissions:
-      contents: read
-      id-token: write
-
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials using OIDC
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
-
-      - name: Check EKS cluster
+      - name: Check if EKS cluster exists
+        id: check-cluster
         run: |
-          aws eks describe-cluster \
-            --name "$EKS_CLUSTER_NAME" \
-            --region "$AWS_REGION"
+          if aws eks describe-cluster --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} > /dev/null 2>&1; then
+            echo "cluster_exists=true" >> "$GITHUB_OUTPUT"
+            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' found."
+          else
+            echo "cluster_exists=false" >> "$GITHUB_OUTPUT"
+            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' NOT found. Will provision with Terraform."
+          fi
+
+      - name: Setup Terraform
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Terraform Init
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        working-directory: ./terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="key=eks/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Terraform Plan
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        working-directory: ./terraform
+        run: |
+          terraform plan \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="cluster_name=${{ env.EKS_CLUSTER_NAME }}" \
+            -var="project_name=shopverse" \
+            -var="create_jump_server=false" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        working-directory: ./terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Wait for EKS cluster to be active
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        run: |
+          echo "Waiting for EKS cluster to become ACTIVE..."
+          aws eks wait cluster-active --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+          echo "Waiting for node group to become ACTIVE..."
+          aws eks wait nodegroup-active \
+            --cluster-name ${{ env.EKS_CLUSTER_NAME }} \
+            --nodegroup-name ${{ env.EKS_CLUSTER_NAME }}-nodes \
+            --region ${{ env.AWS_REGION }}
+          echo "Cluster and nodes are ready."
+
+      - name: Install AWS Load Balancer Controller
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo update
+          ALB_ROLE_ARN=$(cd terraform && terraform output -raw alb_controller_role_arn)
+          helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            -n kube-system \
+            --set clusterName=${{ env.EKS_CLUSTER_NAME }} \
+            --set serviceAccount.create=true \
+            --set serviceAccount.name=aws-load-balancer-controller \
+            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=$ALB_ROLE_ARN
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v3
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v3
 
       - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Login to ECR for Helm
         run: |
-          aws eks update-kubeconfig \
-            --name "$EKS_CLUSTER_NAME" \
-            --region "$AWS_REGION"
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+            helm registry login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
 
-      - name: Verify Kubernetes access
-        run: kubectl get nodes
-
-      - name: Login Helm to Amazon ECR
-        run: |
-          aws ecr get-login-password --region "$AWS_REGION" |
-            helm registry login \
-              --username AWS \
-              --password-stdin "$ECR_REGISTRY"
-
-      - name: Deploy GoCart using Helm
-        env:
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      - name: Deploy Helm chart
         run: |
           helm upgrade --install shopverse \
-            "oci://$ECR_REGISTRY/shopverse-helmchart/shopverse" \
-            --version "1.0.0-$GITHUB_SHA" \
+            oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse \
+            --version 1.0.0-${{ github.sha }} \
+            --set frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
+            --set backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
+            --set mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }} \
+            --set mysql.password=${{ secrets.MYSQL_PASSWORD }} \
+            --set jwtSecret=${{ secrets.JWT_SECRET }} \
             --namespace shopverse \
             --create-namespace \
-            --set-string frontend.image="$ECR_REGISTRY/shopverse-frontend:$GITHUB_SHA" \
-            --set-string backend.image="$ECR_REGISTRY/shopverse-backend:$GITHUB_SHA" \
-            --set-string mysql.rootPassword="$MYSQL_ROOT_PASSWORD" \
-            --set-string mysql.password="$MYSQL_PASSWORD" \
-            --set-string jwtSecret="$JWT_SECRET" \
-            --wait \
-            --timeout 10m \
-            --atomic
+            --wait --timeout 300s \
+            --cleanup-on-fail
 
-      - name: Verify GoCart deployment
+      - name: Verify deployment
         run: |
-          echo "========== KUBERNETES NODES =========="
+          echo ""
+          echo "--- Nodes ---"
           kubectl get nodes -o wide
-
-          echo "========== PODS =========="
+          echo ""
+          echo "--- Pods ---"
           kubectl get pods -n shopverse
-
-          echo "========== SERVICES =========="
-          kubectl get services -n shopverse
-
-          echo "========== DEPLOYMENTS =========="
-          kubectl get deployments -n shopverse
-
-          echo "========== STATEFULSETS =========="
-          kubectl get statefulsets -n shopverse
-
-          echo "========== STORAGE =========="
+          echo ""
+          echo "--- StatefulSets ---"
+          kubectl get sts -n shopverse
+          echo ""
+          echo "--- Services ---"
+          kubectl get svc -n shopverse
+          echo ""
+          echo "--- PV & PVC ---"
           kubectl get pv,pvc -n shopverse
-
-          echo "========== INGRESS =========="
-          kubectl get ingress -n shopverse
+          echo ""
+          echo "--- Secrets ---"
+          kubectl get secrets -n shopverse
+          echo ""
+          echo "--- Ingress ---"
+          kubectl get ingress -n shopverse 2>/dev/null || echo "No ingress configured"
+ 
