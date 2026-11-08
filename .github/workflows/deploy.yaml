@@ -292,9 +292,9 @@ jobs:
             --version 1.0.0-${{ github.sha }} \
             --set frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
             --set backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
-            --set-string mysql.rootPassword="${{ secrets.MYSQL_ROOT_PASSWORD }}" \
-            --set-string mysql.password="${{ secrets.MYSQL_PASSWORD }}" \
-            --set-string jwtSecret="${{ secrets.JWT_SECRET }}" \
+            --set mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }} \
+            --set mysql.password=${{ secrets.MYSQL_PASSWORD }} \
+            --set jwtSecret=${{ secrets.JWT_SECRET }} \
             --namespace shopverse \
             --create-namespace \
             --wait --timeout 300s \
@@ -323,4 +323,4 @@ jobs:
           echo ""
           echo "--- Ingress ---"
           kubectl get ingress -n shopverse 2>/dev/null || echo "No ingress configured"
-
+ 
