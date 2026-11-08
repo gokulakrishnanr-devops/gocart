@@ -1,0 +1,27 @@
+
+### 1. Health Check
+GET http://localhost:8080/health
+
+### 2. Get Products
+GET http://localhost:8080/api/products/
+
+### 3. Customer Login
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "your_actual_registered_email",
+  "password": "your_actual_password"
+}
+
+### 4. Customer Profile
+GET http://localhost:8080/api/profile
+Authorization: Bearer PASTE_TOKEN_FROM_LOGIN_RESPONSE
+
+### 5. Get Cart
+GET http://localhost:8080/api/cart
+Authorization: Bearer PASTE_TOKEN_FROM_LOGIN_RESPONSE
+
+### 6. Get Orders
+GET http://localhost:8080/api/orders
+Authorization: Bearer PASTE_TOKEN_FROM_LOGIN_RESPONSE
