@@ -1,48 +1,288 @@
-name: ShopVerse CI/CD
+
+name: GoCart CI/CD
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
   EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-  HELM_CHART_NAME: shopverse
-  TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+  HELM_CHART_VERSION: 1.0.0-${{ github.sha }}
 
 jobs:
-  # ──────────────────────────────────────────────
-  # Stage 1: Test
-  # ──────────────────────────────────────────────
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Set up Go
+  # ==========================================
+  # STAGE 1: TEST
+  # ==========================================
+  test:
+    name: Test Application
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache: true
+          cache-dependency-path: backend/go.sum
 
-      - name: Update go.sum
+      - name: Download Go dependencies
         working-directory: ./backend
-        run: go mod tidy
+        run: go mod download
 
       - name: Run Go tests
         working-directory: ./backend
         run: go test ./...
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: ./frontend
-        run: npm install
+        run: npm ci
 
-      - name: Run frontend lint
+      - name: Run frontend ESLint
         working-directory: ./frontend
         run: npx eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0 --config .eslintrc.cjs
+
+  # ==========================================
+  # STAGE 2: SECURITY SCAN
+  # ==========================================
+  security-scan:
+    name: Docker Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Build frontend image
+        run: docker build -t gocart-frontend:scan ./frontend
+
+      - name: Build backend image
+        run: docker build -t gocart-backend:scan ./backend
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg
+
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list
+
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Scan frontend image
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            gocart-frontend:scan
+
+      - name: Scan backend image
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            gocart-backend:scan
+
+  # ==========================================
+  # STAGE 3: BUILD AND PUSH TO AMAZON ECR
+  # ==========================================
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+    needs: security-scan
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR repositories if missing
+        run: |
+          for repo in \
+            shopverse-frontend \
+            shopverse-backend \
+            shopverse-helmchart/shopverse
+          do
+            if ! aws ecr describe-repositories \
+              --repository-names "$repo" \
+              --region "$AWS_REGION" >/dev/null 2>&1
+            then
+              aws ecr create-repository \
+                --repository-name "$repo" \
+                --region "$AWS_REGION"
+            fi
+          done
+
+      - name: Build frontend image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/shopverse-frontend:${GITHUB_SHA}" \
+            -t "$ECR_REGISTRY/shopverse-frontend:latest" \
+            ./frontend
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/shopverse-backend:${GITHUB_SHA}" \
+            -t "$ECR_REGISTRY/shopverse-backend:latest" \
+            ./backend
+
+      - name: Push frontend image
+        run: |
+          docker push "$ECR_REGISTRY/shopverse-frontend:${GITHUB_SHA}"
+          docker push "$ECR_REGISTRY/shopverse-frontend:latest"
+
+      - name: Push backend image
+        run: |
+          docker push "$ECR_REGISTRY/shopverse-backend:${GITHUB_SHA}"
+          docker push "$ECR_REGISTRY/shopverse-backend:latest"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Login Helm to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | helm registry login \
+              --username AWS \
+              --password-stdin "$ECR_REGISTRY"
+
+      - name: Package Helm chart
+        run: |
+          helm package ./helm/shopverse \
+            --version "$HELM_CHART_VERSION" \
+            --app-version "$GITHUB_SHA"
+
+      - name: Push Helm chart to ECR
+        run: |
+          helm push "shopverse-${HELM_CHART_VERSION}.tgz" \
+            "oci://${ECR_REGISTRY}/shopverse-helmchart"
+
+  # ==========================================
+  # STAGE 4: DEPLOY TO AMAZON EKS
+  # ==========================================
+  deploy:
+    name: Deploy GoCart to EKS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Check EKS cluster
+        run: |
+          aws eks describe-cluster \
+            --name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION"
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION"
+
+      - name: Verify Kubernetes nodes
+        run: kubectl get nodes
+
+      - name: Login Helm to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | helm registry login \
+              --username AWS \
+              --password-stdin "$ECR_REGISTRY"
+
+      - name: Deploy GoCart using Helm
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          helm upgrade --install shopverse \
+            "oci://${ECR_REGISTRY}/shopverse-helmchart/shopverse" \
+            --version "$HELM_CHART_VERSION" \
+            --namespace shopverse \
+            --create-namespace \
+            --set-string frontend.image="${ECR_REGISTRY}/shopverse-frontend:${GITHUB_SHA}" \
+            --set-string backend.image="${ECR_REGISTRY}/shopverse-backend:${GITHUB_SHA}" \
+            --set-string mysql.rootPassword="$MYSQL_ROOT_PASSWORD" \
+            --set-string mysql.password="$MYSQL_PASSWORD" \
+            --set-string jwtSecret="$JWT_SECRET" \
+            --wait \
+            --timeout 10m \
+            --atomic
+
+      - name: Verify GoCart deployment
+        run: |
+          echo "========== KUBERNETES NODES =========="
+          kubectl get nodes -o wide
+
+          echo "========== PODS =========="
+          kubectl get pods -n shopverse
+
+          echo "========== SERVICES =========="
+          kubectl get services -n shopverse
+
+          echo "========== DEPLOYMENTS =========="
+          kubectl get deployments -n shopverse
+
+          echo "========== STATEFULSETS =========="
+          kubectl get statefulsets -n shopverse
+
+          echo "========== STORAGE =========="
+          kubectl get pv,pvc -n shopverse
+
+          echo "========== INGRESS =========="
+          kubectl get ingress -n shopverse
