@@ -322,3 +322,4 @@ jobs:
 
           echo "========== INGRESS =========="
           kubectl get ingress -n shopverse || true
+          kubectl get ingress -n shopverse || true
