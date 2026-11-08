@@ -1,10 +1,9 @@
 
-
 import { useContext, useEffect, useState } from 'react'
 import { AppContext } from '../App'
 
 export default function AccountPage() {
-  const { api, user, updateUser } = useContext(AppContext)
+  const { api, updateUser } = useContext(AppContext)
 
   const [form, setForm] = useState({
     name: '',
@@ -78,7 +77,6 @@ export default function AccountPage() {
       formData.append('address', form.address.trim())
 
       const response = await api.put('/api/profile', formData)
-
       const updatedProfile = response.data
 
       setForm({
@@ -107,7 +105,9 @@ export default function AccountPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-[#F8F6F1] flex items-center justify-center">
-        <p className="text-sm text-[#77717A]">Loading account details...</p>
+        <p className="text-sm text-[#77717A]">
+          Loading account details...
+        </p>
       </div>
     )
   }

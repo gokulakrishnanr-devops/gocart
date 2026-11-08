@@ -9,7 +9,7 @@ import {
   ArrowLeft,
   CheckCircle,
   ShieldCheck,
-  Truck
+  Truck,
 } from 'lucide-react'
 import { AppContext } from '../App'
 
@@ -29,7 +29,7 @@ export default function CartPage() {
     cartTotal,
     updateCartItem,
     removeCartItem,
-    placeOrder
+    placeOrder,
   } = useContext(AppContext)
 
   const [ordering, setOrdering] = useState(false)
@@ -103,7 +103,7 @@ export default function CartPage() {
           </h1>
 
           <p className="mt-4 text-[13px] leading-7 text-[#89828A]">
-            Looks like you haven't added anything yet. Explore our collection and find something you love.
+            Looks like you haven&apos;t added anything yet. Explore our collection and find something you love.
           </p>
 
           <Link
