@@ -78,7 +78,7 @@ vpc_cidr = "10.0.0.0/16"
 
 # EKS
 cluster_name       = "shopverse-cluster"
-cluster_version    = "1.29"
+cluster_version    = "1.37"
 node_instance_type = "t3.medium"
 node_desired_size  = 2
 node_min_size      = 1

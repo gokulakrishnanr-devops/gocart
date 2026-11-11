@@ -1,0 +1,32 @@
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "eks:AccessKubernetesApi",
+      "Resource": "arn:aws:eks:us-east-1:053495620220:cluster/shopverse-cluster"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "eks:ListFargateProfiles",
+        "eks:DescribeNodegroup",
+        "eks:ListNodegroups",
+        "eks:ListUpdates",
+        "eks:ListAddons",
+        "eks:DescribeCluster",
+        "eks:DescribeAddonVersions",
+        "eks:ListClusters",
+        "eks:ListIdentityProviderConfigs",
+        "iam:ListRoles"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:*:053495620220:parameter/*"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 version: "3.8"
+#
 
 services:
   mysql:
@@ -23,7 +24,7 @@ services:
     build: ./backend
     container_name: shopverse-backend
     ports:
-      - "8080:8080"
+      - "8081:8081"
     environment:
       DB_HOST: mysql
       DB_PORT: "3306"
@@ -41,7 +42,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_URL: http://localhost:8080
+        VITE_API_URL: http://localhost:8081
     container_name: shopverse-frontend
     ports:
       - "3000:80"

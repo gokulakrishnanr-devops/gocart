@@ -17,6 +17,6 @@ COPY --from=builder /shopverse-api /shopverse-api
 
 USER nonroot:nonroot
 
-EXPOSE 8080
+EXPOSE 8081
 
 ENTRYPOINT ["/shopverse-api"]

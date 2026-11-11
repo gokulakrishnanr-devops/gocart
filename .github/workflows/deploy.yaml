@@ -15,7 +15,7 @@ env:
   ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
   EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
   HELM_CHART_VERSION: 1.0.0-${{ github.sha }}
-  TF_STATE_BUCKET: shopverse-terraform-state-v1
+  TF_STATE_BUCKET: gocart-terraform-state
 
 jobs:
 

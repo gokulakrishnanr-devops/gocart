@@ -13,7 +13,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket  = "shopverse-terraform-state-v1"
+    bucket  = "gocart-terraform-state"
     key     = "eks/terraform.tfstate"
     region  = "us-east-1"
     encrypt = true
