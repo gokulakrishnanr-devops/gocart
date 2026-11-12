@@ -18,7 +18,7 @@ backend:
   replicas: 2
   image: ""  # backend-image
   serviceName: shopverse-backend-svc
-  servicePort: 8080
+  servicePort: 8081
   ingressName: shopverse-backend-ingress
   ingressHost: ""
 

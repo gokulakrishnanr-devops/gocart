@@ -141,7 +141,7 @@ spec:
       kind: Rule
       services:
         - name: shopverse-backend-svc
-          port: 8080
+          port: 8081
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
